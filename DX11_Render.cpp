@@ -5,7 +5,6 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 
-
 int CALLBACK 
 WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLineOpts)
 {
@@ -40,7 +39,7 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     SwapChainDesc.BufferDesc.Height = Resolution.h;
     SwapChainDesc.BufferDesc.RefreshRate.Numerator = 60;
     SwapChainDesc.BufferDesc.RefreshRate.Denominator = 1;
-    SwapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    SwapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
     SwapChainDesc.SampleDesc.Count = 1;
     SwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     SwapChainDesc.BufferCount = 2;
@@ -54,8 +53,40 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     ID3D11Texture2D* BackBuffer = NULL;
     SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&BackBuffer);
     
+    ID3D11Texture2D* MultisampleBuffer = NULL;
+    DXGI_FORMAT MultisampleFormat = DXGI_FORMAT_R8G8B8A8_TYPELESS;    
+    //UINT MaxSupportedSampleCount = (Device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_0) ? 8 : 4;    
+    UINT MaxSupportedSampleCount = 8;
+    UINT MultisampleQualityLevel;
+    if(SUCCEEDED(Device->CheckMultisampleQualityLevels(MultisampleFormat, 
+                                                       MaxSupportedSampleCount, 
+                                                       &MultisampleQualityLevel)))
+    {
+        D3D11_TEXTURE2D_DESC TextureDescription = {};
+        TextureDescription.Width = Resolution.w;
+        TextureDescription.Height = Resolution.h;
+        TextureDescription.MipLevels = 1;
+        TextureDescription.ArraySize = 1;
+        TextureDescription.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;    
+        TextureDescription.SampleDesc.Count = MaxSupportedSampleCount;
+        TextureDescription.SampleDesc.Quality = MultisampleQualityLevel-1;
+        TextureDescription.Usage = D3D11_USAGE_DEFAULT;
+        TextureDescription.BindFlags = D3D11_BIND_RENDER_TARGET;        
+        Device->CreateTexture2D(&TextureDescription, NULL, &MultisampleBuffer);        
+    }
+    else
+    {
+        return -1;
+    }
+    
+    
     ID3D11RenderTargetView* RenderTargetView = NULL;
-    Device->CreateRenderTargetView(BackBuffer, NULL, &RenderTargetView);
+    {
+        D3D11_RENDER_TARGET_VIEW_DESC RenderTargetViewDescription = {};
+        RenderTargetViewDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        RenderTargetViewDescription.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
+        Device->CreateRenderTargetView(MultisampleBuffer, &RenderTargetViewDescription, &RenderTargetView);
+    }
     
     ID3D11Buffer* VertexBuffer = NULL;    
     ID3D11Buffer* IndexBuffer = NULL;
@@ -63,9 +94,9 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     {        
         ak_vertex_p4_c4 Triangle[] = 
         {
-            {AK_V4(-0.5f, -0.5f, 0.0f, 1.0f), AK_Blue4()}, 
-            {AK_V4( 0.5f, -0.5f, 0.0f, 1.0f), AK_Yellow4()}, 
-            {AK_V4( 0.0f,  0.5f, 0.0f, 1.0f), AK_Green4()}
+            {AK_V4(-0.5f, -0.5f, 0.0f, 1.0f), AK_Blue4()*0.5f}, 
+            {AK_V4( 0.5f, -0.5f, 0.0f, 1.0f), AK_Green4()*0.5f}, 
+            {AK_V4( 0.0f,  0.5f, 0.0f, 1.0f), AK_Red4()*0.5f}
         };        
         
         D3D11_BUFFER_DESC BufferDescription = {};
@@ -169,7 +200,7 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
         Viewport.MaxDepth = 1.0f;        
         DeviceContext->RSSetViewports(1, &Viewport);
         
-        ak_color4f Color = AK_Red4();
+        ak_color4f Color = AK_White4();
         DeviceContext->ClearRenderTargetView(RenderTargetView, (const float*)&Color);
         
         DeviceContext->PSSetShader(PixelShader, NULL, 0);
@@ -184,8 +215,8 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
         DeviceContext->IASetVertexBuffers(0, 1, &VertexBuffer, &Stride, &Offset);
         DeviceContext->IASetIndexBuffer(IndexBuffer, DXGI_FORMAT_R16_UINT, 0);
         
-        DeviceContext->DrawIndexed(3, 0, 0);        
-        
+        DeviceContext->DrawIndexed(3, 0, 0);                
+        DeviceContext->ResolveSubresource(BackBuffer, 0, MultisampleBuffer, 0, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);        
         SwapChain->Present(1, 0);
     }            
 }

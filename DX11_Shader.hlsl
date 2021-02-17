@@ -15,6 +15,8 @@
 #define ak_m3f float3x3
 #define ak_m4f float4x4
 
+#define GAMMA 2.2f
+
 struct vs_object_input_p4_c4
 {
     ak_v4f P : Position0;
@@ -27,15 +29,25 @@ struct vs_object_output_p4_c4
     ak_v4f C : Color0;
 };
 
+ak_color3f ToLinearSpace(ak_color3f NonLinearSpace)
+{
+    return pow(NonLinearSpace, GAMMA);
+}
+
+ak_color3f ToNonLinearSpace(ak_color3f LinearSpace)
+{
+    return pow(LinearSpace, 1.0f/GAMMA);
+}
+
 vs_object_output_p4_c4 ObjectVertexShader(vs_object_input_p4_c4 Input)
 {
     vs_object_input_p4_c4 Result;
     Result.P = Input.P;
-    Result.C = Input.C;
+    Result.C = ak_color4f(ToLinearSpace(Input.C.rgb), Input.C.a);
     return Result;
 }
 
 ak_color4f ObjectPixelShader(vs_object_output_p4_c4 Input) : SV_Target
-{
+{    
     return Input.C;
 }
