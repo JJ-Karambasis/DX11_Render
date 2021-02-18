@@ -5,5 +5,5 @@ set Common=-Od -nologo -FC -Z7 -Oi -EHsc- %Warnings%
 
 IF NOT EXIST .\Bin mkdir .\Bin
 pushd .\Bin
-cl %Common% -I..\AKCommon ..\DX11_Render.cpp -link DXGI.lib D3D11.lib D3DCompiler.lib -opt:ref -incremental:no -out:DX11_Render.exe
+cl %Common% -I..\AKCommon -I..\imgui ..\DX11_Render.cpp -link DXGI.lib D3D11.lib D3DCompiler.lib -opt:ref -incremental:no -out:DX11_Render.exe
 popd

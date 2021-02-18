@@ -41,6 +41,7 @@ struct ak_v2
 };
 typedef ak_v2<ak_f32> ak_v2f;
 typedef ak_v2<ak_i32> ak_v2i;
+typedef ak_v2<ak_u32> ak_v2u;
 
 template <typename type>
 struct ak_v3
