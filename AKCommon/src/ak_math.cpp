@@ -394,6 +394,11 @@ ak_bool AK_EqualApprox(ak_v2f A, ak_v2f B, ak_f32 Epsilon)
     return AK_SqrMagnitude(A-B) <= AK_Square(Epsilon);
 }
 
+ak_v2u AK_V2u(ak_v2f V)
+{
+    return AK_V2((ak_u32)V.x, (ak_u32)V.y);
+}
+
 template <typename type> 
 ak_v3<type> AK_V3()
 {

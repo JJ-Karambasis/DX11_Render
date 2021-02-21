@@ -5,6 +5,7 @@
 #include <imgui_widgets.cpp>
 #include <imgui_draw.cpp>
 #include <imgui_tables.cpp>
+#include <imgui_demo.cpp>
 
 #include <backends/imgui_impl_win32.cpp>
 #include <backends/imgui_impl_dx11.cpp>
@@ -21,7 +22,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #define WM_DPICHANGED 0x02E0 // From Windows SDK 8.1+ headers
 #endif
 
-#define MULTISAMPLE_FORMAT DXGI_FORMAT_R8G8B8A8_TYPELESS
+#define RENDER_TARGET_VIEW_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
 
 struct dx11_context
 {
@@ -30,44 +31,74 @@ struct dx11_context
     ID3D11DeviceContext* DeviceContext;
     IDXGISwapChain* SwapChain;
     ID3D11Texture2D* BackBuffer;
-    ID3D11Texture2D* MultisampleBuffer;
     ID3D11RenderTargetView* RenderTargetView;    
     UINT SampleCount;
     UINT QualityLevel;
     ak_v2u Resolution;
 };
 
-void CleanupRenderTarget(dx11_context* Context)
+struct game_render_target
 {
-    RELEASE_COM(Context->BackBuffer);
-    RELEASE_COM(Context->MultisampleBuffer);
-    RELEASE_COM(Context->RenderTargetView);
+    ak_v2u Resolution;
+    ID3D11Texture2D* MultisampleBuffer;
+    ID3D11RenderTargetView* MultisampleView;
+    ID3D11Texture2D* GameBuffer;
+    ID3D11ShaderResourceView* GameView;
+};
+
+void DeleteGameRenderTarget(game_render_target* RenderTarget)
+{
+    RELEASE_COM(RenderTarget->MultisampleBuffer);
+    RELEASE_COM(RenderTarget->MultisampleView);
+    RELEASE_COM(RenderTarget->GameBuffer);
+}
+
+void CreateGameRenderTarget(ID3D11Device* Device, game_render_target* RenderTarget, ak_u32 SampleCount, ak_u32 QualityLevel, 
+                            ak_v2u Resolution)
+{
+    D3D11_TEXTURE2D_DESC MultisampleTextureDescription = {};
+    MultisampleTextureDescription.Width = Resolution.w;
+    MultisampleTextureDescription.Height = Resolution.h;
+    MultisampleTextureDescription.MipLevels = 1;
+    MultisampleTextureDescription.ArraySize = 1;
+    MultisampleTextureDescription.Format = RENDER_TARGET_VIEW_FORMAT;
+    MultisampleTextureDescription.SampleDesc.Count = SampleCount;
+    MultisampleTextureDescription.SampleDesc.Quality = QualityLevel-1;
+    MultisampleTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+    MultisampleTextureDescription.BindFlags = D3D11_BIND_RENDER_TARGET;        
+    Device->CreateTexture2D(&MultisampleTextureDescription, NULL, &RenderTarget->MultisampleBuffer);        
+    
+    D3D11_RENDER_TARGET_VIEW_DESC RenderTargetViewDescription = {};
+    RenderTargetViewDescription.Format = RENDER_TARGET_VIEW_FORMAT;
+    RenderTargetViewDescription.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
+    Device->CreateRenderTargetView(RenderTarget->MultisampleBuffer, &RenderTargetViewDescription, &RenderTarget->MultisampleView);
+    
+    D3D11_TEXTURE2D_DESC GameTextureDescription = {};
+    GameTextureDescription.Width = Resolution.w;
+    GameTextureDescription.Height = Resolution.h;
+    GameTextureDescription.MipLevels = 1;
+    GameTextureDescription.ArraySize = 1;
+    GameTextureDescription.Format = RENDER_TARGET_VIEW_FORMAT;
+    GameTextureDescription.SampleDesc.Count = 1;
+    GameTextureDescription.SampleDesc.Quality = 0;
+    GameTextureDescription.Usage = D3D11_USAGE_DEFAULT;
+    GameTextureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    Device->CreateTexture2D(&GameTextureDescription, NULL, &RenderTarget->GameBuffer);
+    Device->CreateShaderResourceView(RenderTarget->GameBuffer, NULL, &RenderTarget->GameView);
+    
+    RenderTarget->Resolution = Resolution;
 }
 
 void CreateRenderTarget(dx11_context* Context)
 {    
     Context->SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&Context->BackBuffer);
-    
-    {
-        D3D11_TEXTURE2D_DESC TextureDescription = {};
-        TextureDescription.Width = Context->Resolution.w;
-        TextureDescription.Height = Context->Resolution.h;
-        TextureDescription.MipLevels = 1;
-        TextureDescription.ArraySize = 1;
-        TextureDescription.Format = MULTISAMPLE_FORMAT;
-        TextureDescription.SampleDesc.Count = Context->SampleCount;
-        TextureDescription.SampleDesc.Quality = Context->QualityLevel-1;
-        TextureDescription.Usage = D3D11_USAGE_DEFAULT;
-        TextureDescription.BindFlags = D3D11_BIND_RENDER_TARGET;        
-        Context->Device->CreateTexture2D(&TextureDescription, NULL, &Context->MultisampleBuffer);        
-    }
-    
-    {
-        D3D11_RENDER_TARGET_VIEW_DESC RenderTargetViewDescription = {};
-        RenderTargetViewDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-        RenderTargetViewDescription.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DMS;
-        Context->Device->CreateRenderTargetView(Context->MultisampleBuffer, &RenderTargetViewDescription, &Context->RenderTargetView);
-    }            
+    Context->Device->CreateRenderTargetView(Context->BackBuffer, NULL, &Context->RenderTargetView);
+}
+
+void CleanupRenderTarget(dx11_context* Context)
+{
+    RELEASE_COM(Context->BackBuffer);
+    RELEASE_COM(Context->RenderTargetView);
 }
 
 // Forward declare message handler from imgui_impl_win32.cpp
@@ -141,20 +172,20 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     WindowClass.hInstance = GetModuleHandle(0);
     WindowClass.lpszClassName = "DX11_Render";    
     RegisterClassEx(&WindowClass);
-        
+    
     dx11_context Context = {};    
     
     Context.Resolution = {1280, 720};
     RECT WindowRect = {0, 0, (LONG)Context.Resolution.w, (LONG)Context.Resolution.h};
     AdjustWindowRectEx(&WindowRect, WS_OVERLAPPEDWINDOW|WS_VISIBLE, FALSE, 0);        
-    HWND Window = CreateWindow(WindowClass.lpszClassName, "DX11_Render", WS_OVERLAPPEDWINDOW|WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 
+    HWND Window = CreateWindow(WindowClass.lpszClassName, "DX11_Render", (WS_OVERLAPPEDWINDOW|WS_VISIBLE), CW_USEDEFAULT, CW_USEDEFAULT, 
                                WindowRect.right-WindowRect.left, WindowRect.bottom-WindowRect.top, 0, 0, GetModuleHandle(0), &Context);
     
     
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO* IO = &ImGui::GetIO();
-    IO->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard|ImGuiConfigFlags_DockingEnable|ImGuiConfigFlags_ViewportsEnable;    
+    IO->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard|ImGuiConfigFlags_DockingEnable|ImGuiConfigFlags_ViewportsEnable;
     
     ImGui::StyleColorsDark();
     ImGuiStyle* Style = &ImGui::GetStyle();
@@ -180,8 +211,9 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
                       FeatureLevels, AK_Count(FeatureLevels), D3D11_SDK_VERSION, &Context.Device, 
                       NULL, &Context.DeviceContext);
     
-    Context.SampleCount = (Context.Device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_0) ? 8 : 4; 
-    if(FAILED(Context.Device->CheckMultisampleQualityLevels(MULTISAMPLE_FORMAT, Context.SampleCount, &Context.QualityLevel)))        
+    Context.SampleCount = (Context.Device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_0) ? 8 : 4;
+	//Context.SampleCount = 1; 
+    if(FAILED(Context.Device->CheckMultisampleQualityLevels(RENDER_TARGET_VIEW_FORMAT, Context.SampleCount, &Context.QualityLevel)))        
         return false;    
     
     ImGui_ImplWin32_Init(Window);
@@ -192,7 +224,7 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     SwapChainDesc.BufferDesc.Height = Context.Resolution.h;
     SwapChainDesc.BufferDesc.RefreshRate.Numerator = 60;
     SwapChainDesc.BufferDesc.RefreshRate.Denominator = 1;
-    SwapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    SwapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     SwapChainDesc.SampleDesc.Count = 1;
     SwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     SwapChainDesc.BufferCount = 2;
@@ -284,7 +316,9 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
     RasterizerDesc.FrontCounterClockwise = TRUE;
     ID3D11RasterizerState* RasterizerState = NULL;
     Context.Device->CreateRasterizerState(&RasterizerDesc, &RasterizerState);
-        
+    
+    game_render_target GameRenderTarget[2] = {};
+    
     for(;;)
     {
         MSG Message;
@@ -309,15 +343,117 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
         
-        local ak_bool Close;
-        if(!Close)
-        {
-            ImGui::Begin("Hello World", (bool*)&Close);
-            ImGui::End();
-        }
-        
-        ImGui::Begin("Another Hello World");
+        ImGuiViewport* MainViewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(MainViewport->Pos);
+        ImGui::SetNextWindowSize(MainViewport->Size);
+        ImGuiID ID = AK_HashFunction("Main Window");
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushID(ID);
+        ImGui::Begin("Main Window", NULL, ImGuiWindowFlags_NoDecoration);
+        ImGui::DockSpace(ID, MainViewport->Size, ImGuiDockNodeFlags_None, NULL);
         ImGui::End();
+        ImGui::PopID();
+        ImGui::PopStyleVar();
+        
+        ImGui::SetNextWindowPos(MainViewport->Pos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(MainViewport->Size, ImGuiCond_FirstUseEver);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Game Viewport 0");
+        {
+            ak_v2u WindowDim = AK_V2u(ImGui::GetWindowSize());
+            if(GameRenderTarget[0].Resolution != WindowDim)
+            {
+                DeleteGameRenderTarget(&GameRenderTarget[0]);
+                CreateGameRenderTarget(Context.Device, &GameRenderTarget[0], Context.SampleCount, Context.QualityLevel, WindowDim);
+            }
+            
+            Context.DeviceContext->OMSetRenderTargets(1, &GameRenderTarget[0].MultisampleView, NULL);
+            
+            D3D11_VIEWPORT Viewport = {};
+            Viewport.Width = (ak_f32)WindowDim.w;
+            Viewport.Height = (ak_f32)WindowDim.h;
+            Viewport.MinDepth = 0.0f;        
+            Viewport.MaxDepth = 1.0f;        
+            Context.DeviceContext->RSSetViewports(1, &Viewport);
+            
+            ak_color4f Color = AK_White4();
+            Context.DeviceContext->ClearRenderTargetView(GameRenderTarget[0].MultisampleView, (const float*)&Color);
+            
+            Context.DeviceContext->PSSetShader(PixelShader, NULL, 0);
+            Context.DeviceContext->VSSetShader(VertexShader, NULL, 0);
+            
+            Context.DeviceContext->RSSetState(RasterizerState);
+            Context.DeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            Context.DeviceContext->IASetInputLayout(InputLayout);
+            
+            UINT Stride = sizeof(ak_vertex_p4_c4);
+            UINT Offset = 0;
+            Context.DeviceContext->IASetVertexBuffers(0, 1, &VertexBuffer, &Stride, &Offset);
+            Context.DeviceContext->IASetIndexBuffer(IndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+            
+            Context.DeviceContext->DrawIndexed(3, 0, 0);                           
+            
+            Context.DeviceContext->ResolveSubresource(GameRenderTarget[0].GameBuffer, 0, GameRenderTarget[0].MultisampleBuffer, 0, RENDER_TARGET_VIEW_FORMAT);
+            
+            ImVec2 TopLeft = ImGui::GetCursorScreenPos();
+            ImVec2 BottomRight = TopLeft+ImGui::GetWindowSize();
+            
+            ImGui::GetWindowDrawList()->AddImage((void*)GameRenderTarget[0].GameView, TopLeft, BottomRight, ImVec2(0, 0), ImVec2(1, 1));
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        
+        ImGui::SetNextWindowPos(MainViewport->Pos, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(MainViewport->Size, ImGuiCond_FirstUseEver);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Game Viewport 1");
+        {
+            AK_ConsoleLog("Is Window Docked %d\n", ImGui::IsWindowDocked());
+            
+            ak_v2u WindowDim = AK_V2u(ImGui::GetWindowSize());
+            if(GameRenderTarget[1].Resolution != WindowDim)
+            {
+                DeleteGameRenderTarget(&GameRenderTarget[1]);
+                CreateGameRenderTarget(Context.Device, &GameRenderTarget[1], Context.SampleCount, Context.QualityLevel, WindowDim);
+            }
+            
+            Context.DeviceContext->OMSetRenderTargets(1, &GameRenderTarget[1].MultisampleView, NULL);
+            
+            D3D11_VIEWPORT Viewport = {};
+            Viewport.Width = (ak_f32)WindowDim.w;
+            Viewport.Height = (ak_f32)WindowDim.h;
+            Viewport.MinDepth = 0.0f;        
+            Viewport.MaxDepth = 1.0f;        
+            Context.DeviceContext->RSSetViewports(1, &Viewport);
+            
+            ak_color4f Color = AK_White4();
+            Context.DeviceContext->ClearRenderTargetView(GameRenderTarget[1].MultisampleView, (const float*)&Color);
+            
+            Context.DeviceContext->PSSetShader(PixelShader, NULL, 0);
+            Context.DeviceContext->VSSetShader(VertexShader, NULL, 0);
+            
+            Context.DeviceContext->RSSetState(RasterizerState);
+            Context.DeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            Context.DeviceContext->IASetInputLayout(InputLayout);
+            
+            UINT Stride = sizeof(ak_vertex_p4_c4);
+            UINT Offset = 0;
+            Context.DeviceContext->IASetVertexBuffers(0, 1, &VertexBuffer, &Stride, &Offset);
+            Context.DeviceContext->IASetIndexBuffer(IndexBuffer, DXGI_FORMAT_R16_UINT, 0);
+            
+            Context.DeviceContext->DrawIndexed(3, 0, 0);                           
+            
+            Context.DeviceContext->ResolveSubresource(GameRenderTarget[1].GameBuffer, 0, GameRenderTarget[1].MultisampleBuffer, 0, RENDER_TARGET_VIEW_FORMAT);
+            
+            ImVec2 TopLeft = ImGui::GetCursorScreenPos();
+            ImVec2 BottomRight = TopLeft+ImGui::GetWindowSize();
+            
+            ImGui::GetWindowDrawList()->AddImage((void*)GameRenderTarget[1].GameView, TopLeft, BottomRight, ImVec2(0, 0), ImVec2(1, 1));
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        
+        ImGui::ShowDemoWindow();
         
         ImGui::Render();
         
@@ -332,22 +468,8 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
         ak_color4f Color = AK_White4();
         Context.DeviceContext->ClearRenderTargetView(Context.RenderTargetView, (const float*)&Color);
         
-        Context.DeviceContext->PSSetShader(PixelShader, NULL, 0);
-        Context.DeviceContext->VSSetShader(VertexShader, NULL, 0);
-        
-        Context.DeviceContext->RSSetState(RasterizerState);
-        Context.DeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        Context.DeviceContext->IASetInputLayout(InputLayout);
-        
-        UINT Stride = sizeof(ak_vertex_p4_c4);
-        UINT Offset = 0;
-        Context.DeviceContext->IASetVertexBuffers(0, 1, &VertexBuffer, &Stride, &Offset);
-        Context.DeviceContext->IASetIndexBuffer(IndexBuffer, DXGI_FORMAT_R16_UINT, 0);
-        
-        Context.DeviceContext->DrawIndexed(3, 0, 0);                           
-        
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-                
+        
         // Update and Render additional Platform Windows
         if (IO->ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         {
@@ -355,7 +477,7 @@ WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CmdLineArgs, int CmdLi
             ImGui::RenderPlatformWindowsDefault();
         }        
         
-        Context.DeviceContext->ResolveSubresource(Context.BackBuffer, 0, Context.MultisampleBuffer, 0, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);        
+        
         Context.SwapChain->Present(1, 0);
     }            
 }

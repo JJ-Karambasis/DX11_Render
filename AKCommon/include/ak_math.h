@@ -467,6 +467,7 @@ ak_v2f AK_V2f(ak_i32 x, ak_i32 y);
 ak_v2f AK_V2f(ak_v2i V);
 ak_v2f AK_V2f(ak_f64 x, ak_f64 y);
 ak_v2f AK_V2f(ak_f64* Data);
+ak_v2u AK_V2u(ak_v2f V);
 ak_bool AK_EqualApprox(ak_v2f A, ak_v2f B, ak_f32 Epsilon);
 
 ////////////////////////////////////////////////////

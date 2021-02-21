@@ -43,7 +43,7 @@ vs_object_output_p4_c4 ObjectVertexShader(vs_object_input_p4_c4 Input)
 {
     vs_object_input_p4_c4 Result;
     Result.P = Input.P;
-    Result.C = ak_color4f(ToLinearSpace(Input.C.rgb), Input.C.a);
+    Result.C = Input.C;
     return Result;
 }
 
